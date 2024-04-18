@@ -256,6 +256,39 @@ class FedAvg(object):
         path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['id']}_{num_epoch}.pth"
         torch.save(self.model.state_dict(), path)
 
+class FedCustomWeights(FedAvg):
+ def aggregate(self, sampled_client_indices, coefficients, weighting='uniform'):
+        """Average the updated and transmitted parameters from each selected client."""
+        num_sampled_clients = len(sampled_client_indices)
+
+        if self.hparam:
+            weighting=self.hparam["custom_weighting"]
+
+        averaged_weights = OrderedDict()
+        for it, idx in tqdm(enumerate(sampled_client_indices), leave=False):
+
+            local_weights = self.clients[idx].model.state_dict()
+            #print(local_weights)
+            if weighting=='uniform':
+                ## just take 1/n where n is the number of clients
+                #local_weightsv=np.ones(local_weights.shape)/num_samples_clients
+                print(np.array(coefficients).shape)
+                print(coefficients)
+                coefficients=np.ones(np.array(coefficients).shape)/num_sampled_clients
+            elif weighting=='random':
+                ## take some random convex combination
+                print(np.array(coefficients).shape)
+                random_weights=np.random.rand(*np.array(coefficients).shape)
+                S=np.sum(random_weights)
+                coefficients=random_weights/S
+                print(coefficients)
+            for key in self.model.state_dict().keys():
+                if it == 0:
+                    averaged_weights[key] = coefficients[it] * local_weights[key]
+                else:
+                    averaged_weights[key] += coefficients[it] * local_weights[key]
+        self.model.load_state_dict(averaged_weights)
+
 
 class FedDG(FedAvg):
     def register_clients(self, clients):

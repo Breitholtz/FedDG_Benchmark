@@ -140,6 +140,7 @@ def main(args):
     central_server = eval(hparam["server_method"])(device, ds_bundle, hparam)
     if hparam['server_method'] == "FedDG":
         central_server.set_amploader(global_dataloader)
+
     if hparam['start_epoch'] == 0:
         central_server.setup_model(None, 0)
     else:
