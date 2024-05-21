@@ -1,0 +1,12 @@
+{
+    "log_path": "/log",
+    "data_path": "/mimer/NOBACKUP/groups/lupida/",
+    "dataset_path": "/mimer/NOBACKUP/groups/lupida/resources/",
+    "start_epoch": 0,
+    "custom_weighting": "uniform",
+    "server_method": "FedCustomWeights",
+    "imbalanced_split": 1,
+    "num_rounds": 5,
+    "id": "unif_wildcam",
+    "dataset": "IWildCam"
+}

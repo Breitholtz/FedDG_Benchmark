@@ -43,6 +43,7 @@ class ERM(object):
         self.dataset = dataset
         self.ds_bundle = ds_bundle
         self.hparam = hparam
+        self.accuracy=0
         self.n_groups_per_batch = hparam['n_groups_per_batch']
         self.local_epochs = self.hparam['local_epochs']
         self.batch_size = self.hparam["batch_size"]
@@ -56,8 +57,8 @@ class ERM(object):
             self.scheduler_config = {'factor': 1, 'total_iters': 1}
         self.dataloader = get_train_loader(self.loader_type, self.dataset, batch_size=self.batch_size, uniform_over_groups=None, grouper=self.ds_bundle.grouper, distinct_groups=False, n_groups_per_batch=self.n_groups_per_batch)
         self.saved_optimizer = False
-        self.opt_dict_path = "/local/scratch/a/bai116/opt_dict/client_{}.pt".format(self.client_id)
-        self.sch_dict_path = "/local/scratch/a/bai116/sch_dict/client_{}.pt".format(self.client_id)
+        self.opt_dict_path = "/mimer/NOBACKUP/groups/lupida/opt_dict/client_{}.pt".format(self.client_id) ### change these so we save all results and such in unique place
+        self.sch_dict_path = "/mimer/NOBACKUP/groups/lupida/sch_dict/client_{}.pt".format(self.client_id)
         if os.path.exists(self.opt_dict_path): os.remove(self.opt_dict_path)
 
     def setup_model(self, featurizer, classifier):
@@ -118,6 +119,23 @@ class ERM(object):
             'metadata': metadata,
         }
         return results
+
+    
+    def client_evaluate(self):
+        #### supposed to yield an evaluation from the client
+        from sklearn import metrics
+        self.init_train()
+        tot=0
+        k=0
+        for batch in tqdm(self.dataloader):
+            results = self.process_batch(batch)
+            
+            ## here we compute the metric based on the max of each row. Hope this is correct....
+            tot+=torch.tensor(metrics.accuracy_score(results['y_true'].detach().cpu(), torch.max(results['y_pred'],1).indices.detach().cpu())).cuda()
+            k+=1
+        self.accuracy=tot/k
+        return tot/k
+        
 
     def step(self, results):
         # print(results['y_true'])

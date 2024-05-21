@@ -15,6 +15,76 @@ class DatasetSplitter(object):
     """
     def split(self):
         pass
+
+
+
+class ImbalancedSplitter(DatasetSplitter):
+    def __init__(self, num_clients, config, test_classes, seed=1):
+        self.test_classes = test_classes # which class should be missing
+        ## what should be in here?, how skewed the split should be, config of the run,
+        self.num_clients=num_clients
+        self.config=config
+        self.seed=seed
+        self.rng = np.random.default_rng(self.seed)
+        
+    def split(self, dataset, domain_field, transform=None):
+        # dataset: WILDSubset or WILDSDataset
+        
+        ## split should take into account how many clients there are, if more than the number of classes maybe we do not run
+        ## the split thereafter puts many samples in one or two clients and few in the last one, the clients do not have access to a specific class each 
+        if self.num_clients!=3:
+            # this is not what this construction is for
+            return NotImplementedError
+        domain_field = dataset._metadata_fields.index(domain_field[0])
+        num_examples_per_domain = np.bincount(dataset.metadata_array[:,domain_field])
+        print("number of examples per domain:",num_examples_per_domain)
+        #print(np.unique(np.array(dataset.y_array)))
+        indices = np.array(dataset.indices)
+        
+        class1_idx= np.where(dataset.y_array == self.test_classes[0])[0] ## do this for all the different classes? share the rest equally?
+        class2_idx= np.where(dataset.y_array == self.test_classes[1])[0]
+        class3_idx= np.where(dataset.y_array == self.test_classes[2])[0]
+        ## remove the ones which are not in the indices list?
+        
+        print("Class amounts: ", len(class1_idx),len(class2_idx),len(class3_idx))
+        ## remove the odd classes from the total list
+        rem_idx = indices
+        class_indices=np.append(class1_idx,class2_idx)
+        class_indices=np.append(class_indices,class3_idx)
+        class_indices=np.ravel(class_indices)
+        rem_idx=np.delete(rem_idx, class_indices)
+        
+        #split odd classes in two and give them to two clients; construct index sets for the three clients
+        perm_indices = self.rng.permutation(rem_idx)
+
+        # as a final step we make one of the clients sample size much smaller 10% of remaining data vs. 45% each for the other two, could make this more extreme
+        pos1=int(0.33*len(perm_indices))
+        pos2=int(0.66*len(perm_indices))
+        
+        client1=np.append(np.append(perm_indices[:pos1],class1_idx[:int(0.5*len(class1_idx))]),class2_idx[:int(0.5*len(class2_idx))]) ## not seen 3
+        print("# client 1 before:",len(client1))
+        #print(np.random.choice(client1, int(0.1*len(client1)),replace=False))
+        client1=np.random.choice(client1, int(0.1*len(client1)),replace=False)
+        print("# client 1 after:",len(client1))
+        client2=np.append(np.append(perm_indices[pos1:pos2],class1_idx[int(0.5*len(class1_idx)):]),class3_idx[:int(0.5*len(class3_idx))]) ## not seen 2 
+        client3=np.append(np.append(perm_indices[pos2:],class2_idx[int(0.5*len(class2_idx)):]),class3_idx[int(0.5*len(class3_idx)):]) ## not seen 1
+        print("# client 2:",len(client2))
+        print("# client 3:",len(client3))
+         
+        
+        datasets=[]
+        if isinstance(dataset, WILDSSubset):
+            datasets.append(WILDSSubset(dataset.dataset, client1.tolist(), transform=transform))
+            datasets.append(WILDSSubset(dataset.dataset, client2.tolist(), transform=transform))
+            datasets.append(WILDSSubset(dataset.dataset, client3.tolist(), transform=transform))
+        elif isinstance(dataset, WILDSDataset):
+            datasets.append(WILDSSubset(dataset, client1.tolist(), transform=transform))
+            datasets.append(WILDSSubset(dataset, client2.tolist(), transform=transform))
+            datasets.append(WILDSSubset(dataset, client3.tolist(), transform=transform))
+        else:
+            return NotImplementedError
+
+        return datasets
         
 class LeaveOneDomainOutSplitter(DatasetSplitter):
     def __init__(self, test_domain):

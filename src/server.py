@@ -106,7 +106,8 @@ class FedAvg(object):
             return True
         for idx in tqdm(sampled_client_indices):
             self.clients[idx].client_evaluate()
-            
+
+    
 
     def aggregate(self, sampled_client_indices, coefficients):
         """Average the updated and transmitted parameters from each selected client."""
@@ -119,13 +120,43 @@ class FedAvg(object):
                 else:
                     averaged_weights[key] += coefficients[it] * local_weights[key]
         self.model.load_state_dict(averaged_weights)
-    
 
+    def compute_gradient_diff(self,sampled_client_indices):
+        """Calculate the gradient difference in cosine similarity between clients"""
+        from sklearn.metrics.pairwise import cosine_similarity
+        #### gradients calc
+        grads=comp_grads(client_models, global_model,lr) ## lr necessary?
+        if len(old_grads)==0:
+            pass
+        else:
+            # compute the difference between the vectors
+            grad_diff=[]
+            for i, grad in enumerate(grads):
+                d=cosine_similarity(old_grads[i].reshape(1,-1),grad.reshape(1,-1))
+                print(d)
+                grad_diff.append(d)
+            gradient_differences.append(grad_diff)
+        old_grads=grads
+        print("Hi")
+        return
+    def distance_to_global(self,sampled_client_indices):
+        ## distance calc
+        M=comp_dist(client_models)
+        dist=np.triu(M,1).sum()
+        client_dists.append(dist)
+        print('The sum of the distances between clients: %0.3f' % dist)
+        ## compute the distance of the clients from the global model
+        client2global=dist_from_global(client_models,global_model)
+        client_to_global.append(client2global)
+        print('The distance from the clients to the global model before aggregation:', client2global)
+    
     def train_federated_model(self):
         """Do federated training."""
         # select pre-defined fraction of clients randomly
         sampled_client_indices = self.sample_clients()
 
+        # here we should measure diff between global and local models, or down below before the aggregation
+        
         # send global model to the selected clients
         self.transmit_model(sampled_client_indices)
 
@@ -186,7 +217,7 @@ class FedAvg(object):
             print(metric)
             if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
-        return metric[0]
+        return metric
 
     def fit(self):
         """
@@ -209,10 +240,12 @@ class FedAvg(object):
             id_t_val = 0
             t_val = 0
             for name, dataloader in self.test_dataloader.items():
-                metric = self.evaluate_global_model(dataloader)
+                metric, result_str = self.evaluate_global_model(dataloader)
                 metric_dict[name] = metric
-                
+                print(metric_dict)
+                print(name)
                 if name == 'val':
+                    print(self.ds_bundle.key_metric)
                     lodo_val = metric[self.ds_bundle.key_metric]
                     if lodo_val > best_lodo_val_value:
                         best_lodo_val_round = r
@@ -246,17 +279,25 @@ class FedAvg(object):
                 wandb.summary['best_lodo_round'] = best_lodo_val_round
                 wandb.summary['best_lodo_val_acc'] = best_lodo_val_test_value
         else:
-            print("best_id_round: " + best_id_val_round)
-            print("best_id_val_acc: " + best_id_val_test_value)
-            print("best_lodo_round: " + best_lodo_val_round)
-            print("best_lodo_val_acc: " + best_lodo_val_test_value)
+            print("best_id_round: " + str(best_id_val_round))
+            print("best_id_val_acc: " + str(best_id_val_test_value))
+            print("best_lodo_round: " + str(best_lodo_val_round))
+            print("best_lodo_val_acc: " + str(best_lodo_val_test_value))
         self.transmit_model()
 
     def save_model(self, num_epoch):
-        path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['id']}_{num_epoch}.pth"
+        path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{num_epoch}.pth"
         torch.save(self.model.state_dict(), path)
 
 class FedCustomWeights(FedAvg):
+ def evaluate_clients(self, sampled_client_indices):
+        def evaluate_single_client(selected_index):
+            self.clients[selected_index].client_evaluate()
+            return True
+        sum=0
+        for idx in tqdm(sampled_client_indices):
+            sum+=self.clients[idx].client_evaluate()
+        return sum
  def aggregate(self, sampled_client_indices, coefficients, weighting='uniform'):
         """Average the updated and transmitted parameters from each selected client."""
         num_sampled_clients = len(sampled_client_indices)
@@ -265,31 +306,65 @@ class FedCustomWeights(FedAvg):
             weighting=self.hparam["custom_weighting"]
 
         averaged_weights = OrderedDict()
+        if weighting=='performance':
+            client_sum=self.evaluate_clients(sampled_client_indices)
         for it, idx in tqdm(enumerate(sampled_client_indices), leave=False):
 
             local_weights = self.clients[idx].model.state_dict()
             #print(local_weights)
             if weighting=='uniform':
                 ## just take 1/n where n is the number of clients
-                #local_weightsv=np.ones(local_weights.shape)/num_samples_clients
-                print(np.array(coefficients).shape)
-                print(coefficients)
                 coefficients=np.ones(np.array(coefficients).shape)/num_sampled_clients
             elif weighting=='random':
-                ## take some random convex combination
-                print(np.array(coefficients).shape)
+                ## take some random convex combination; changes every iteration
+                #print(np.array(coefficients).shape)
                 random_weights=np.random.rand(*np.array(coefficients).shape)
                 S=np.sum(random_weights)
                 coefficients=random_weights/S
-                print(coefficients)
+                #print(coefficients)
+            elif weighting=='performance':
+                ## weighted based on client performance on validation(right now on local dataset)
+                # calculate how much weight each client should have based on the measured accuracy
+                coefficients=np.zeros(np.array(coefficients).shape)
+                ### could just do for the idx client here
+                #for i, ix in enumerate(self.clients):
+                coefficients[it]= self.clients[idx].accuracy/client_sum
+            elif weighting=='gradients':
+                pass
+                ## based on client coherence
             for key in self.model.state_dict().keys():
                 if it == 0:
                     averaged_weights[key] = coefficients[it] * local_weights[key]
                 else:
-                    averaged_weights[key] += coefficients[it] * local_weights[key]
+                    if averaged_weights[key].get_device()!=0:
+                        averaged_weights[key]=averaged_weights[key].cuda()
+                    if local_weights[key].get_device()!=0:
+                        local_weights[key]=local_weights[key].cuda()
+                    #print(local_weights[key].get_device())
+                    averaged_weights[key] += coefficients[it] * local_weights[key]   
         self.model.load_state_dict(averaged_weights)
 
+# def evaluate_clients(self, sampled_client_indices):
+#     def evaluate_single_client(selected_index):
+#         self.clients[selected_index].client_evaluate()
+#         return True
+#     for idx in tqdm(sampled_client_indices):
+#         self.clients[idx].client_evaluate()
 
+
+
+# def aggregate(self, sampled_client_indices, coefficients):
+#     """Average the updated and transmitted parameters from each selected client."""
+#     averaged_weights = OrderedDict()
+#     for it, idx in tqdm(enumerate(sampled_client_indices), leave=False):
+#         local_weights = self.clients[idx].model.state_dict()
+#         for key in self.model.state_dict().keys():
+#             if it == 0:
+#                 averaged_weights[key] = coefficients[it] * local_weights[key]
+#             else:
+#                 averaged_weights[key] += coefficients[it] * local_weights[key]
+#     self.model.load_state_dict(averaged_weights)
+    
 class FedDG(FedAvg):
     def register_clients(self, clients):
         # assert self._round == 0

@@ -73,6 +73,8 @@ def main(args):
     #     indices = torch.arange(len(dataset)).reshape(-1,1)
     #     new_metadata_array = torch.cat((dataset.metadata_array, indices), dim=1)
     #     dataset._metadata_array = new_metadata_array
+
+    
     if hparam['client_method'] == "FedSR":
         ds_bundle = eval(hparam["dataset"])(dataset, probabilistic=True)
     else:
@@ -111,6 +113,9 @@ def main(args):
     
     sampler = RandomSampler(total_subset, replacement=True)
     global_dataloader = DataLoader(total_subset, batch_size=hparam["batch_size"], sampler=sampler)
+
+
+    ### make another choice
     # # DS
     # out_test_dataset, test_train = RandomSplitter(ratio=0.5, seed=seed).split(out_test_dataset)
     # out_test_dataset.transform = ds_bundle.test_transform
@@ -123,7 +128,11 @@ def main(args):
     if num_shards == 1:
         training_datasets = [total_subset]
     elif num_shards > 1:
-        training_datasets = NonIIDSplitter(num_shards=num_shards, iid=hparam['iid'], seed=seed).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform)
+        if hparam['imbalanced_split']:
+            training_datasets = ImbalancedSplitter(num_shards, hparam, [0,1,2]).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform) # just take the first three classes as the ones to use
+            print(training_datasets)
+        else:
+            training_datasets = NonIIDSplitter(num_shards=num_shards, iid=hparam['iid'], seed=seed).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform)
     else:
         raise ValueError("num_shards should be greater or equal to 1, we got {}".format(num_shards))
 
@@ -149,11 +158,15 @@ def main(args):
     central_server.register_testloader(testloader)
     # do federated learning
     central_server.fit()
+
+    # save final model ?
     
     # bye!
+    
     message = "...done all learning process!\n...exit program!"
     logging.info(message)
     time.sleep(3)
+    print("Finished training, exiting...")
     exit()
 
 if __name__ == "__main__":
@@ -163,9 +176,9 @@ if __name__ == "__main__":
     parser.add_argument('--seed', default=1001, type=int)
     parser.add_argument('--num_clients', default=1, type=int)
     parser.add_argument('--batch_size', default=16, type=int)
-    parser.add_argument('--iid', default=1, type=float)
+    parser.add_argument('--iid', default=1, type=float) ## whether we have heterogenous clients or not, 1 is iid, 0 is ood
     parser.add_argument('--server_method', default='FedAvg')
-    parser.add_argument('--fraction', default=1, type=float)
+    parser.add_argument('--fraction', default=1, type=float) ## fraction of clients sampled each time
     parser.add_argument('--f', default=10, type=int)
     parser.add_argument('--num_rounds', default=20, type=int)
     parser.add_argument('--dataset', default='PACS')

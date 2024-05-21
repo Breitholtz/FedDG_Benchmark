@@ -288,3 +288,60 @@ def euclidean_proj_simplex(v, s=1):
     # compute the projection by thresholding v using theta
     w = (v - theta).clamp(min=0)
     return w  
+
+def get_model_dist_L2(model_1,model_2):
+    ## computes the L2 between two models and returns the result
+    #for i, p in enumerate(model_1.parameters()):
+    sum=0
+    norm=0
+    for i,p in enumerate(model_1.parameters()):
+        norm+=torch.norm(p)
+    #print(norm)
+    for i,p in enumerate(model_1.parameters()):
+        for i2,p2 in enumerate(model_2.parameters()):
+            #print(p2.data.cpu())
+            if i==i2:
+                sum+=torch.dist(p.data.cuda(),p2.data.cuda(),p=2)/norm#torch.cdist(p.data, p2.data, p=2)
+                #print(p.data-p2.data)#-client_models[0].parameters())
+    return sum
+def get_model_difference(model_1,model_2):
+    ## computes the absolute difference between two models and returns the resulting parameter difference
+    #for i, p in enumerate(model_1.parameters()):
+    delta_theta=np.array([])
+    for i,p in enumerate(model_1.parameters()):
+        for i2,p2 in enumerate(model_2.parameters()):
+            if i==i2:
+                diff=p.data.cpu()-p2.data.cpu()
+                #print(diff.cpu().numpy())
+                delta_theta=np.append(delta_theta,diff)
+    # print("Here is the Delta_theta",delta_theta)
+    # print("Here is the shape",delta_theta.shape)
+    return delta_theta
+def comp_grads(client_models, global_model, lr):
+    # theta_global is the reference, the gradient for each client is the difference between their parameters and the global one, divided by the learning rate
+    L=len(client_models)
+    results=[]
+    #print(results.shape)
+    for i in range(L):
+            dist=get_model_difference(client_models[i],global_model)
+            results.append(dist*1/lr)
+    return results
+def comp_dist(client_models):
+    # compute and log L2-distance between clients, probably have to do this before propagation from server to clients
+    L=len(client_models)
+    results=np.ones((L,L))
+    #print(results.shape)
+    for i in range(L):
+        for j in range(L):
+            dist=get_model_dist_L2(client_models[i],client_models[j])
+            #print(dist)
+            results[i,j]=dist
+    return results
+def dist_from_global(client_models, global_model):
+    L=len(client_models)
+    results=np.ones((L))
+    #print(results.shape)
+    for i in range(L):
+            dist=get_model_dist_L2(client_models[i],global_model)
+            results[i]=dist
+    return results

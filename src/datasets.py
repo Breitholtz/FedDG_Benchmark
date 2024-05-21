@@ -7,6 +7,8 @@ import pandas as pd
 from PIL import Image
 from pathlib import Path
 
+from sklearn import metrics ## for own metrics which are not in WILDS
+from sklearn.preprocessing import LabelBinarizer
 from wilds.common.utils import map_to_id_array
 from wilds.common.metrics.all_metrics import Accuracy
 from wilds.common.grouper import CombinatorialGrouper
@@ -135,9 +137,27 @@ class PACS(WILDSDataset):
             - results_str (str): String summarizing the evaluation metrics
         """
         metric: Accuracy = Accuracy(prediction_fn=prediction_fn)
-        return self.standard_eval(
+        
+        # Here we can add new metrics such as AUC
+        y=y_true
+        y = np.reshape(y, y_pred.shape)
+
+        le=LabelBinarizer()
+        y=le.fit_transform(y)
+        y_predoh=le.transform(y_pred)
+        results={}
+
+        
+        AUC=metrics.roc_auc_score(y, y_predoh, multi_class='ovo')
+
+        acc=self.standard_eval(
             metric, y_pred, y_true
         )
+        
+        results.update({**acc[0]})
+        results.update({'AUC': AUC})
+        result_str="placeholder"
+        return results, result_str ## need result string to conform to wilds?
 
 
 class FourierPACS(PACS):
