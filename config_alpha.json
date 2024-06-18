@@ -4,9 +4,10 @@
     "dataset_path": "/mimer/NOBACKUP/groups/lupida/resources/",
     "result_path": "/mimer/NOBACKUP/groups/lupida/FedDG_Benchmark/results/",
     "start_epoch": 0,
-    "custom_weighting": "uniform",
+    "custom_weighting": "alphastar",
     "server_method": "FedCustomWeights",
     "num_rounds": 10,
+    "num_clients":3,
     "metric": {
         "goal": "maximize",
         "name": "test.acc_wg"
@@ -14,7 +15,7 @@
     "iid":0,
     "id": "unif",
     "imbalanced_split": 1,
-    "dists_known":1, 
-    "reg_lambda":0,
+    "dists_known":1,
+    "reg_lambda":100, 
     "dataset": "PACS"
 }

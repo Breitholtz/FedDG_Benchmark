@@ -125,12 +125,15 @@ def main(args):
     # training_datasets = [total_subset]
     # print(len(total_subset), len(in_validation_dataset), len(lodo_validation_dataset), len(in_test_dataset), len(out_test_dataset))
     num_shards = hparam['num_clients']
+    training_labeldists=[]
     if num_shards == 1:
         training_datasets = [total_subset]
     elif num_shards > 1:
         if hparam['imbalanced_split']:
-            training_datasets = ImbalancedSplitter(num_shards, hparam, [0,1,2]).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform) # just take the first three classes as the ones to use
-            print(training_datasets)
+            classes_chosen=[0,1,2]
+            if hparam["dataset"].lower() == "iwildcam":
+                classes_chosen=[1,2,4]
+            training_datasets, training_labeldists = ImbalancedSplitter(num_shards, hparam, classes_chosen).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform) # just take the first three classes as the ones to use, 1,2,3 for wildcam
         else:
             training_datasets = NonIIDSplitter(num_shards=num_shards, iid=hparam['iid'], seed=seed).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform)
     else:
@@ -156,6 +159,14 @@ def main(args):
         central_server.setup_model(hparam['resume_file'], hparam['start_epoch'])
     central_server.register_clients(clients)
     central_server.register_testloader(testloader)
+    central_server.label_dist=training_labeldists
+    ## do the target label dists here?
+    for name, dataloader in central_server.test_dataloader.items():
+        if name=="test":
+            metric, result_str = central_server.evaluate_global_model(dataloader, initial_dist=1) ## maybe change this later based on which label dist to consider
+        
+    
+    
     # do federated learning
     central_server.fit()
 

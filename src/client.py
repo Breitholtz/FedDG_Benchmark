@@ -49,6 +49,7 @@ class ERM(object):
         self.batch_size = self.hparam["batch_size"]
         self.optimizer_name = self.hparam['optimizer']
         self.optim_config = self.hparam['optimizer_config']
+        self.label_dist = None
         try:
             self.scheduler_name = self.hparam['scheduler']
             self.scheduler_config = self.hparam['scheduler_config']
@@ -96,12 +97,23 @@ class ERM(object):
         """Update local model using local dataset."""
         self.init_train()
         training_loss = 0.
+        label_dist= torch.empty(self.dataset._n_classes) ## tensor of label amounts
         for e in range(self.local_epochs):
             for batch in tqdm(self.dataloader):
+                x, y_true, metadata = batch
+                
+                # increment for the labels that were in the batch
+                #label_dist+=torch.bincount(y_true, minlength=self.dataset._n_classes) ## this sometimes becomes very large? why?
+                
                 results = self.process_batch(batch)
                 training_loss += self.step(results)
             if self.hparam['wandb']:
                 wandb.log({"loss/{}".format(self.client_id): training_loss/len(self.dataset)}, step=server_round*self.local_epochs+e)
+        #print(label_dist)
+        #print(label_dist/torch.sum(label_dist))
+        #self.label_dist=label_dist/torch.sum(label_dist) ## does this work?
+        
+        
         self.end_train()
     
     def process_batch(self, batch):

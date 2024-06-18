@@ -29,9 +29,11 @@ class FedAvg(object):
         self.num_clients = 0
         self.test_dataloader = {}
         self._round = 0
+        self.label_dist=None
+        self.target_label_dist=None
         self.featurizer = None
         self.classifier = None
-    
+        self.client_labeldists=[]
     def setup_model(self, model_file=None, start_epoch=0):
         """
         The model setup depends on the datasets. 
@@ -42,6 +44,7 @@ class FedAvg(object):
         self.featurizer = nn.DataParallel(self._featurizer)
         self.classifier = nn.DataParallel(self._classifier)
         self.model = nn.DataParallel(nn.Sequential(self._featurizer, self._classifier))
+        
         if model_file:
             self.model.load_state_dict(torch.load(model_file))
             self._round = int(start_epoch)
@@ -50,11 +53,13 @@ class FedAvg(object):
         # assert self._round == 0
         self.clients = clients
         self.num_clients = len(self.clients)
+        
         for client in tqdm(self.clients):
             client.setup_model(copy.deepcopy(self._featurizer), copy.deepcopy(self._classifier))
     
     def register_testloader(self, dataloaders):
         self.test_dataloader.update(dataloaders)
+
     
     def transmit_model(self, sampled_client_indices=None):
         """
@@ -149,6 +154,21 @@ class FedAvg(object):
         client2global=dist_from_global(client_models,global_model)
         client_to_global.append(client2global)
         print('The distance from the clients to the global model before aggregation:', client2global)
+    def estimate_label_dist(self, sampled_client_indices):
+        ## we just return a list of the distribution tensors for the clients
+        
+        print(self.model.state_dict()['module.0.network.fc.weight'])
+        for idx in sampled_client_indices:
+            print(self.clients[idx].state.dict()['module.0.network.fc.weight'])
+
+        # TODO: here the actual estimation should be
+        
+        print("The estimation should be here!")
+        A
+        
+            
+        ## For contrast, RLU needs : Auxiliary dataset A, the global model θ, local updates ∆θ_k ,∆W(t) , ∆b, learning rate η
+        ## what should we do here? try to find a way to keep a running estimate of the label distribution
     
     def train_federated_model(self):
         """Do federated training."""
@@ -163,6 +183,14 @@ class FedAvg(object):
         # updated selected clients with local dataset
         selected_total_size = self.update_clients(sampled_client_indices)
 
+        # maybe estimate label dist here?
+        if self.client_labeldists != None and self.hparam['dists_known']==1:
+            pass # this has already been found
+            #dists=self.client_labeldists
+        else:
+            #we have to estimate the label distributions
+            dists=estimate_label_dist(sampled_client_indices)
+        
         # evaluate selected clients with local dataset (same as the one used for local update)
         # self.evaluate_clients(sampled_client_indices)
 
@@ -170,7 +198,7 @@ class FedAvg(object):
         mixing_coefficients = [len(self.clients[idx]) / selected_total_size for idx in sampled_client_indices]
         self.aggregate(sampled_client_indices, mixing_coefficients)
     
-    def evaluate_global_model(self, dataloader):
+    def evaluate_global_model(self, dataloader, initial_dist=0):
         """Evaluate the global model using the global holdout dataset (self.data)."""
         self.model.eval()
         self.model.to(self.device)
@@ -214,12 +242,17 @@ class FedAvg(object):
                 # print("DEBUG: server.py:183")
                 # break
             metric = self.ds_bundle.dataset.eval(y_pred.to("cpu"), y_true.to("cpu"), metadata.to("cpu"))
-            print(metric)
+            #print(metric)
+            
+            
+            if initial_dist:
+                self.target_label_dist=np.bincount(np.array(y_true.to("cpu")))
             if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
         return metric
 
     def fit(self):
+        import pickle #for saving result dict
         """
         Description: Execute the whole process of the federated learning.
         """
@@ -242,8 +275,8 @@ class FedAvg(object):
             for name, dataloader in self.test_dataloader.items():
                 metric, result_str = self.evaluate_global_model(dataloader)
                 metric_dict[name] = metric
-                print(metric_dict)
-                print(name)
+                #print(metric_dict)
+                #print(name)
                 if name == 'val':
                     print(self.ds_bundle.key_metric)
                     lodo_val = metric[self.ds_bundle.key_metric]
@@ -267,6 +300,19 @@ class FedAvg(object):
                 best_id_val_test_value = id_t_val
             
             print(metric_dict)
+            if self.hparam['result_path']:
+                
+                # save/append the metrics dict to a file
+                if self.hparam["server_method"]=="FedCustomWeights":
+                    dirname=f"{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{self.hparam['custom_weighting']}_{self.hparam['reg_lambda']}"
+                else:
+                    dirname=f"{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}"
+                filename=f"{r}_{self.hparam['seed']}_{'results.pkl'}" 
+                if not os.path.exists(self.hparam['result_path']+str(dirname)):
+                    os.makedirs(self.hparam['result_path']+str(dirname))
+                with open(self.hparam['result_path']+str(dirname)+"/"+str(filename), 'wb') as f:
+                    pickle.dump(metric_dict, f)
+                
             if self.hparam['wandb']:
                 wandb.log(metric_dict, step=self._round*self.hparam['local_epochs'])
             self.save_model(r)
@@ -286,10 +332,20 @@ class FedAvg(object):
         self.transmit_model()
 
     def save_model(self, num_epoch):
-        path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{num_epoch}.pth"
+        if self.hparam["server_method"]=="FedCustomWeights":
+            if self.hparam["custom_weighting"]=="alphastar":
+                path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['custom_weighting']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{self.hparam['reg_lambda']}_{self.hparam['seed']}_{num_epoch}.pth"
+            else:
+                path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['custom_weighting']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{self.hparam['seed']}_{num_epoch}.pth"
+        else:
+            path = f"{self.hparam['data_path']}/models/{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{self.hparam['seed']}_{num_epoch}.pth"
         torch.save(self.model.state_dict(), path)
 
 class FedCustomWeights(FedAvg):
+ def __init__(self, device, ds_bundle, hparam):
+        super().__init__(device, ds_bundle, hparam)
+        self.reg_lambda=0
+        self.alphastar=None
  def evaluate_clients(self, sampled_client_indices):
         def evaluate_single_client(selected_index):
             self.clients[selected_index].client_evaluate()
@@ -298,13 +354,13 @@ class FedCustomWeights(FedAvg):
         for idx in tqdm(sampled_client_indices):
             sum+=self.clients[idx].client_evaluate()
         return sum
- def aggregate(self, sampled_client_indices, coefficients, weighting='uniform'):
+ def aggregate(self, sampled_client_indices, coefficients, weighting='uniform', client_label_dists=None):
         """Average the updated and transmitted parameters from each selected client."""
         num_sampled_clients = len(sampled_client_indices)
 
         if self.hparam:
             weighting=self.hparam["custom_weighting"]
-
+        
         averaged_weights = OrderedDict()
         if weighting=='performance':
             client_sum=self.evaluate_clients(sampled_client_indices)
@@ -329,9 +385,30 @@ class FedCustomWeights(FedAvg):
                 ### could just do for the idx client here
                 #for i, ix in enumerate(self.clients):
                 coefficients[it]= self.clients[idx].accuracy/client_sum
-            elif weighting=='gradients':
-                pass
-                ## based on client coherence
+            elif weighting=='alphastar':
+                self.reg_lambda = float(self.hparam['reg_lambda'])
+                import scipy
+                #print("We are in alphastar territory")
+                ## here we want to do the minimization that finds the trade-off between clients and target while keeping sample efficicency in mind
+                # min_alpha |T(y)-\sum_i alpha_i S_i(y)| + lambdasum_i (alpha_i/n_i)^2
+                #print("Target labels: ",self.target_label_dist)
+                #print("Client labels: ", self.label_dist)
+                x0=np.ones(np.array(coefficients).shape)/num_sampled_clients # start at uniform
+                def loss(alpha, target_labels=[], client_labels=[], reg_lambda=0):
+                    sum=0
+                    alpha_sum=0
+                    for idx, label in enumerate(client_labels):
+                        sum+=alpha[idx]*label
+                        alpha_sum+=alpha[idx]**2/(np.sum(label))**2
+
+                    obj=np.linalg.norm(target_labels-sum)+ alpha_sum*reg_lambda
+                    return obj
+                alphastar=scipy.optimize.minimize(loss, x0, args=(self.target_label_dist,self.label_dist, self.reg_lambda), constraints=(scipy.optimize.LinearConstraint(np.ones(len(x0)), ub=1)))
+                self.alphastar=alphastar.x
+                coefficients =alphastar.x
+                print("Alpha*: ",coefficients)
+            
+            ## TODO: do one based on client coherence?
             for key in self.model.state_dict().keys():
                 if it == 0:
                     averaged_weights[key] = coefficients[it] * local_weights[key]
