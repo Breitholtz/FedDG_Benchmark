@@ -7,6 +7,6 @@
     "local_ep": 1,
     "dirichlet_beta": 0.5,
     "gpu:": 0,
-    "seed": 95,
+    "seed": 93,
     "dataset": "mnist"
 }

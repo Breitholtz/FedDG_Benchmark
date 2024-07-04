@@ -204,7 +204,7 @@ def generate_federated_datasets(dataset, num_clients, alpha, num_samples_per_cli
     return client_datasets, client_loaders
 
 #plot a heatmap: X-axis is client number, Y-axis is label number, and the value in each cell is the number of samples in that client with that label.
-def plot_label_distributions(client_loaders):
+def plot_label_distributions(client_loaders, save_path=None):
     num_clients = len(client_loaders)
     num_classes = len(np.unique(client_loaders[0].dataset.dataset.targets))
     label_counts = np.zeros((num_clients, num_classes))
@@ -220,6 +220,8 @@ def plot_label_distributions(client_loaders):
     plt.ylabel("Label")
     plt.title("Label distributions for each client")
     plt.show()
+    if save_path is not None:
+        plt.savefig(save_path)
 
 
 def split_data(dataset,n_parts):

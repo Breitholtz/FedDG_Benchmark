@@ -66,6 +66,8 @@ if __name__ == '__main__':
     n_samples_per_client = n_samples_per_client.astype(int)
     client_datasets, client_loaders = generate_federated_datasets(dataset, args.num_clients, args.dirichlet_beta, n_samples_per_client, args.bs)
 
+    plot_label_distributions(client_loaders,save_path = experiment_dir+'/label_distributions.png')
+
     source_label_list = [get_label_distribution(client_datasets[i],n_labels=10) for i in range (len(client_datasets))]
 
     source_labels = np.array([])
