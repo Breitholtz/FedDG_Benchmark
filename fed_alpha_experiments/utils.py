@@ -119,12 +119,17 @@ def optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, n_epochs,
         print(alpha.detach().numpy(), loss.item())
     return alpha
 
-def train_fed(n_communication, num_local_epochs, clients_fed, lr, test_loader, wd=0.0, optimize_alpha_bool=False, target_labels=None, source_labels=None):
+def train_fed(n_communication, num_local_epochs, clients_fed, lr, lr_alpha, val_loader, test_loader, wd=0.0, optimize_alpha_bool=False, target_labels=None, source_labels=None):
     n_clients = len(clients_fed)
     mean_loss_fed = []
     mean_acc_fed = []
-    test_acc_fed = []
+    val_loss_fed = []
+    test_acc_fed, val_acc_fed = [], []
     dataset_sizes = [clients_fed[i].train_loader.dataset.__len__() for i in range(n_clients)]
+    n_early_stopping = 10
+    count = 0
+    best_val_loss = np.inf
+    best_model = copy.deepcopy(clients_fed[0].model)
     if(not optimize_alpha_bool):
         alpha = np.array(dataset_sizes)/np.sum(dataset_sizes)
         print(alpha)
@@ -147,17 +152,33 @@ def train_fed(n_communication, num_local_epochs, clients_fed, lr, test_loader, w
             #initialize alpha
             alpha = np.random.rand(n_clients)
             alpha = alpha/np.sum(alpha)
-            alpha = optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, 20, 0.1, 1.0)
+            alpha = optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, 20, lr_alpha, 1.0)
             alpha = alpha.detach().numpy()
             alpha = alpha/np.sum(alpha)
         w_global_model_fedavg = FedAvg(param, alpha)
         for i in range(n_clients):
             clients_fed[i].model.load_state_dict(copy.deepcopy(w_global_model_fedavg))
 
-        test_loss, test_acc = clients_fed[0].test(test_loader)
-        test_acc_fed.append(test_acc)
 
-    return clients_fed[0].model, mean_loss_fed, mean_acc_fed, test_acc_fed
+        val_loss, val_acc = clients_fed[0].test(val_loader)
+        val_acc_fed.append(val_acc)
+        val_loss_fed.append(val_loss)
+        if(val_loss < best_val_loss):
+            best_model = copy.deepcopy(clients_fed[0].model)
+            best_val_loss = val_loss
+            count = 0
+        else:
+            count += 1
+        if(count == n_early_stopping):
+            print(f'Early stopping at round {k}')
+            break
+
+        if(test_loader is not None):
+            test_loss, test_acc = clients_fed[0].test(test_loader)
+            test_acc_fed.append(test_acc)
+        
+
+    return best_model, mean_loss_fed, mean_acc_fed, test_acc_fed, val_loss_fed, val_acc_fed
 
 
 def generate_federated_datasets(dataset, num_clients, alpha, num_samples_per_client, bs):
@@ -243,3 +264,7 @@ def get_label_distribution(dataset,n_labels):
         label_distribution[i] = np.sum(labels==i)
     label_distribution = label_distribution/np.sum(label_distribution)
     return label_distribution
+
+# Function to extract targets
+def extract_targets(subset, original_dataset):
+    return [original_dataset.targets[i] for i in subset.indices]

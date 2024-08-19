@@ -8,8 +8,9 @@ def args_parser():
     parser.add_argument('--bs', type=int, default=8, help="batch size")
     parser.add_argument('--lr', type=float, default=0.01, help="learning rate")
     parser.add_argument('--wd', type=float, default=0.0, help="weight decay")
-
+    parser.add_argument('--lr_alpha', type=float, default=0.01, help="learning rate for alpha")
     parser.add_argument('--local_ep', type=int, default=3, help="the number of local epochs: E")
+    parser.add_argument('--method', type=str, default='fedavg', help="name of method")
 
     # other arguments
     parser.add_argument('--dataset', type=str, default='mnist', help="name of dataset")
