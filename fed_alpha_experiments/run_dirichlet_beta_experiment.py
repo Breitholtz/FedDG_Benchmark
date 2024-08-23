@@ -8,9 +8,11 @@ def run_experiment(config_file):
     with open(config_file) as fh:
         config = json.load(fh)
     
-    dirichlet_beta_values = [0.5, 1.0, 5.0, 10.0]
-    for dirichlet_beta_value in dirichlet_beta_values:
-        config["dirichlet_beta"] = dirichlet_beta_value
+    #dirichlet_beta_values = [0.5, 1.0, 3.0, 5.0, 10]
+    #lr_values = [1e-4, 5e-4, 1e-3, 1e-2, 1e-1]
+    reg_lambda_values = [0] #[10, 100, 1000, 10000]
+    for value in reg_lambda_values:
+        config["reg_lambda"] = value
         config_file = "./config_temp.json"
         
         # Save the modified configuration to a temporary file

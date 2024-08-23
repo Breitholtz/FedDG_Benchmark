@@ -1,0 +1,15 @@
+{
+    "n_rounds": 100,
+    "num_clients": 10,
+    "bs": 32,
+    "lr": 0.1,
+    "lr_alpha": 0.1,
+    "wd": 0.0,
+    "local_ep": 1,
+    "dirichlet_beta": 0.5,
+    "gpu:": 0,
+    "reg_lambda": 0,
+    "dataset": "cifar10",
+    "seed": 570,
+    "fedavg": 1
+}

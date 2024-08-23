@@ -28,6 +28,9 @@ if __name__ == '__main__':
     for key in config:
         setattr(args, key, config[key])
 
+    if "fedavg" in config and config["fedavg"]:
+        args.fedavg = True
+
     print(args)
     
     if(args.seed == None):
@@ -48,12 +51,12 @@ if __name__ == '__main__':
     os.mkdir(experiment_dir)
 
 
-    filename = 'results'
+    filename = 'results_cifar'
     filexist = os.path.isfile(f"./save/{args.dataset}/"+filename) 
     if(not filexist):
         with open(f"./save/{args.dataset}/"+filename,'a') as f1:
 
-            f1.write('n_rounds;num_clients;local_ep;bs;lr;lr_alpha;seed;dirichlet_beta;dataset;test_acc_fedavg;test_acc_fedalpha')
+            f1.write('n_rounds;num_clients;local_ep;bs;lr;lr_alpha;reg_lambda;seed;dirichlet_beta;dataset;val_acc_fed;val_acc_fedalpha;test_acc_fedavg;test_acc_fedalpha')
 
             f1.write('\n')
 
@@ -76,6 +79,19 @@ if __name__ == '__main__':
         #create validation loader
         val_loader = DataLoader(val_dataset, batch_size=args.bs, shuffle=True)
         origin_model = MLP_MNIST(784, 64, 10)
+    if(args.dataset=='cifar10'):
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+        dataset = datasets.CIFAR10(root='../../data', train=True, download=True, transform=transform)
+        #split into train and val
+        n_train = int(len(dataset)*0.8)
+        n_val = len(dataset) - n_train
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [n_train, n_val])
+        train_targets = extract_targets(train_dataset, dataset)
+        train_dataset.targets = train_targets
+        
+        #create validation loader
+        val_loader = DataLoader(val_dataset, batch_size=args.bs, shuffle=True)
+        origin_model = CNN()
 
     n_samples_per_client = np.random.dirichlet([args.dirichlet_beta] * args.num_clients, 1)[0]
     n_samples_per_client = np.round(n_samples_per_client/np.sum(n_samples_per_client)*len(train_dataset))
@@ -90,48 +106,65 @@ if __name__ == '__main__':
     for s in source_label_list:
         #create matrix of all source label distributions:
         source_labels = np.append(source_labels,s)
-    source_labels = source_labels.reshape(len(client_datasets),10)
-    source_labels = torch.tensor(source_labels).T
+    source_labels = source_labels.reshape(len(client_datasets),10).T
+    #source_labels = torch.tensor(source_labels).T
 
     model_fed = copy.deepcopy(origin_model)
     criterion = nn.CrossEntropyLoss()
     print('Number of clients: ', args.num_clients)
     fed_val_loader = None
 
+    if(args.fedavg):
+        clients_fed = []
+        for i in range(args.num_clients-1): #use last client as test client
+            clients_fed.append(FederatedClient(copy.deepcopy(origin_model), criterion, client_loaders[i], device, fed_val_loader))
+
+        print(len(clients_fed))
+
+        #Federated Average
+        model_fedavg, train_loss_fedavg, train_acc_fedavg, test_acc_fedavg, val_loss_fed, val_acc_fed = train_fed(args.n_rounds, args.local_ep, clients_fed, args.lr, args.lr_alpha, val_loader, test_loader=client_loaders[-1], wd=args.wd, optimize_alpha_bool=False, target_labels=None, source_labels=None, reg_lambda=None)
+        best_valacc_fed = np.max(val_acc_fed)
+
+    else:
+        model_fedavg = None
+        train_loss_fedavg = [np.nan]
+        train_acc_fedavg = [np.nan]
+        test_acc_fedavg = [np.nan]
+        val_loss_fed = [np.nan]
+        val_acc_fed = [np.nan]
+        best_valacc_fed = np.nan
+
+    #Federated Alpha
     clients_fed = []
     for i in range(args.num_clients-1): #use last client as test client
         clients_fed.append(FederatedClient(copy.deepcopy(origin_model), criterion, client_loaders[i], device, fed_val_loader))
-
     print(len(clients_fed))
-
-    model_fedavg, train_loss_fedavg, train_acc_fedavg, test_acc_fedavg, val_loss_fed, val_acc_fed = train_fed(args.n_rounds, args.local_ep, clients_fed, args.lr, args.lr_alpha, val_loader, test_loader=client_loaders[-1], wd=args.wd, optimize_alpha_bool=False, target_labels=None, source_labels=None)
-
-    clients_fed = []
-    for i in range(args.num_clients-1):
-        clients_fed.append(FederatedClient(copy.deepcopy(origin_model), criterion, client_loaders[i], device, val_loader))
-    print(len(clients_fed))
-    model_fedalpha, train_loss_fedalpha, train_acc_fedalpha, test_acc_fedalpha, val_loss_fedalpha, val_acc_fedalpha = train_fed(args.n_rounds, args.local_ep, clients_fed, args.lr, args.lr_alpha, val_loader, test_loader=client_loaders[-1], wd=args.wd, optimize_alpha_bool=True, target_labels=source_labels[:,-1], source_labels=source_labels[:,0:-1])
-
+    model_fedalpha, train_loss_fedalpha, train_acc_fedalpha, test_acc_fedalpha, val_loss_fedalpha, val_acc_fedalpha = train_fed(args.n_rounds, args.local_ep, clients_fed, args.lr, args.lr_alpha, val_loader, test_loader=client_loaders[-1], wd=args.wd, optimize_alpha_bool=True, target_labels=source_labels[:,-1], source_labels=source_labels[:,0:-1], reg_lambda=args.reg_lambda)
+    best_valacc_fedalpha = np.max(val_acc_fedalpha)
 
     with open(f"./save/{args.dataset}/"+filename,'a') as f1:
-        f1.write(f'{args.n_rounds};{args.num_clients};{args.local_ep};{args.bs};{args.lr};{args.lr_alpha};{seed};{args.dirichlet_beta};{args.dataset};{test_acc_fedavg[-1]};{test_acc_fedalpha[-1]}')
+        f1.write(f'{args.n_rounds};{args.num_clients};{args.local_ep};{args.bs};{args.lr};{args.lr_alpha};{args.reg_lambda};{seed};{args.dirichlet_beta};{args.dataset};{best_valacc_fed};{best_valacc_fedalpha};{test_acc_fedavg[-1]};{test_acc_fedalpha[-1]}')
         f1.write('\n')
 
     sns.set_theme()
     plt.figure()
     plt.plot(train_loss_fedalpha)
     plt.plot(train_loss_fedavg)
+    plt.plot(val_loss_fed)
+    plt.plot(val_loss_fedalpha)
     plt.xlabel('Communication rounds')
     plt.ylabel('Training loss')
-    plt.legend(['FedAlpha', 'FedAvg'])
+    plt.legend(['FedAlpha', 'FedAvg', 'Val FedAvg', 'Val FedAlpha'])
     plt.savefig(experiment_dir+'/train_loss.png')
 
     plt.figure()
     plt.plot(train_acc_fedalpha)
     plt.plot(train_acc_fedavg)
+    plt.plot(val_acc_fed)
+    plt.plot(val_acc_fedalpha)
     plt.xlabel('Communication rounds')
     plt.ylabel('Train accuracy')
-    plt.legend(['FedAlpha', 'FedAvg'])
+    plt.legend(['FedAlpha', 'FedAvg', 'Val FedAvg', 'Val FedAlpha'])
     plt.savefig(experiment_dir+'/train_acc.png')
 
     plt.figure()
@@ -152,4 +185,5 @@ if __name__ == '__main__':
 
     #save model
     torch.save(model_fedalpha.state_dict(), experiment_dir+'/model_fedalpha.pth')
-    torch.save(model_fedavg.state_dict(), experiment_dir+'/model_fedavg.pth')
+    if(args.fedavg):
+        torch.save(model_fedavg.state_dict(), experiment_dir+'/model_fedavg.pth')

@@ -11,6 +11,8 @@ def args_parser():
     parser.add_argument('--lr_alpha', type=float, default=0.01, help="learning rate for alpha")
     parser.add_argument('--local_ep', type=int, default=3, help="the number of local epochs: E")
     parser.add_argument('--method', type=str, default='fedavg', help="name of method")
+    parser.add_argument('--reg_lambda', type=float, default=0.0, help="regularization term")
+    parser.add_argument('--fedavg', action='store_true', help="use fedavg")
 
     # other arguments
     parser.add_argument('--dataset', type=str, default='mnist', help="name of dataset")

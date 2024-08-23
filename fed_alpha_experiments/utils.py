@@ -11,6 +11,8 @@ from torch.utils.data import Subset
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset, Subset
 from torch.nn import functional as F
+import scipy
+from collections import defaultdict
 
 class FederatedClient():
     def __init__(self, model, criterion, train_loader, device, val_loader=None):
@@ -97,36 +99,43 @@ def softmax(x,tau):
     #x is a vector, tau is the temperature. large tau -> uniform distribution, small tau -> argmax
     return torch.exp(x/tau)/torch.sum(torch.exp(x/tau),dim=0)
 
-def optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, n_epochs, eta, mu):
+def alpha_loss(alpha, target_labels=[], source_labels=[], dataset_sizes =[], reg_lambda=0):
+    obj = np.linalg.norm(target_labels - np.matmul(source_labels,alpha),ord=2)**2 + reg_lambda * np.linalg.norm(alpha,ord=2)**2/np.linalg.norm(dataset_sizes,ord=1)
+    return obj
+
+def optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, reg_lambda):
     #given a vector T(y) (target labels) and S(y) (source labels), optimize alpha with SGD
     #initialize alpha
     dataset_sizes = torch.tensor(dataset_sizes)
-    alpha = torch.tensor(alpha, requires_grad=True)
-    optimizer = optim.SGD([alpha], lr=eta)
-    for i in range(n_epochs):
+    #alpha = torch.tensor(alpha, requires_grad=True)
+    #optimizer = optim.SGD([alpha], lr=eta)
+    #for i in range(n_epochs):
         #soft_alpha = softmax(alpha, 0.1)
-        loss = torch.norm(target_labels - torch.matmul(source_labels,alpha),p=2)
+        #loss = torch.norm(target_labels - torch.matmul(source_labels,alpha),p=2)
         #loss2 = mu * torch.norm(alpha/dataset_sizes,p=2)
         #loss = loss1 + loss2
-        optimizer.zero_grad()
-        loss.backward()
+        #optimizer.zero_grad()
+        #loss.backward()
 
         # Gradient clipping
         #torch.nn.utils.clip_grad_norm_([alpha], 0.5)
 
-        optimizer.step()
+        #optimizer.step()
         
-        print(alpha.detach().numpy(), loss.item())
+        #print(alpha.detach().numpy(), loss.item())
+    constraints = scipy.optimize.LinearConstraint(np.ones(len(alpha)), lb=1, ub=1)
+    bounds = scipy.optimize.Bounds(0,1)
+    alpha = scipy.optimize.minimize(alpha_loss, alpha, args=(target_labels,source_labels, dataset_sizes, reg_lambda), constraints=constraints, bounds=bounds)
     return alpha
 
-def train_fed(n_communication, num_local_epochs, clients_fed, lr, lr_alpha, val_loader, test_loader, wd=0.0, optimize_alpha_bool=False, target_labels=None, source_labels=None):
+def train_fed(n_communication, num_local_epochs, clients_fed, lr, lr_alpha, val_loader, test_loader, wd=0.0, optimize_alpha_bool=False, target_labels=None, source_labels=None, reg_lambda=0.0):
     n_clients = len(clients_fed)
     mean_loss_fed = []
     mean_acc_fed = []
     val_loss_fed = []
     test_acc_fed, val_acc_fed = [], []
     dataset_sizes = [clients_fed[i].train_loader.dataset.__len__() for i in range(n_clients)]
-    n_early_stopping = 10
+    n_early_stopping = 105
     count = 0
     best_val_loss = np.inf
     best_model = copy.deepcopy(clients_fed[0].model)
@@ -152,9 +161,9 @@ def train_fed(n_communication, num_local_epochs, clients_fed, lr, lr_alpha, val_
             #initialize alpha
             alpha = np.random.rand(n_clients)
             alpha = alpha/np.sum(alpha)
-            alpha = optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, 20, lr_alpha, 1.0)
-            alpha = alpha.detach().numpy()
-            alpha = alpha/np.sum(alpha)
+            alpha = optimize_alpha(target_labels, source_labels, alpha, dataset_sizes, reg_lambda)
+            alpha = alpha.x
+            #alpha = alpha/np.sum(alpha)
         w_global_model_fedavg = FedAvg(param, alpha)
         for i in range(n_clients):
             clients_fed[i].model.load_state_dict(copy.deepcopy(w_global_model_fedavg))
@@ -244,6 +253,29 @@ def plot_label_distributions(client_loaders, save_path=None):
     if save_path is not None:
         plt.savefig(save_path)
 
+
+# Function to split the dataset into N clients with only two labels each
+def split_labels_among_clients(dataset, num_clients):
+    labels = np.array(dataset.targets)
+    label_indices = defaultdict(list)
+    
+    # Store indices of each label
+    for idx, label in enumerate(labels):
+        label_indices[label.item()].append(idx)
+    
+    client_data_indices = [[] for _ in range(num_clients)]
+    label_pool = list(label_indices.keys())
+    
+    # Distribute two labels to each client
+    for i in range(num_clients):
+        chosen_labels = np.random.choice(label_pool, 2, replace=False)
+        for label in chosen_labels:
+            client_data_indices[i].extend(label_indices[label])
+        
+    # Create datasets for each client
+    client_datasets = [Subset(dataset, indices) for indices in client_data_indices]
+    
+    return client_datasets
 
 def split_data(dataset,n_parts):
     #split dataset into equal parts uniformly
