@@ -48,6 +48,7 @@ def main(args):
     seed = hparam['seed']
     set_seed(seed)
     data_path = hparam['data_path']
+    run_id='{date:%Y%m%d_%H%M}'.format(date=datetime.datetime.now()) 
     if not os.path.exists(data_path + "opt_dict/"): os.makedirs(data_path + "opt_dict/")
     if not os.path.exists(data_path + "models/"): os.makedirs(data_path + "models/")
 
@@ -113,7 +114,7 @@ def main(args):
     
     sampler = RandomSampler(total_subset, replacement=True)
     global_dataloader = DataLoader(total_subset, batch_size=hparam["batch_size"], sampler=sampler)
-
+    
 
     ### make another choice
     # # DS
@@ -124,6 +125,8 @@ def main(args):
     #     total_subset = concat_subset(total_subset, test_train)
     # training_datasets = [total_subset]
     # print(len(total_subset), len(in_validation_dataset), len(lodo_validation_dataset), len(in_test_dataset), len(out_test_dataset))
+
+    
     num_shards = hparam['num_clients']
     training_labeldists=[]
     if num_shards == 1:
@@ -135,21 +138,21 @@ def main(args):
                 classes_chosen=[1,2,4]
             training_datasets, training_labeldists = ImbalancedSplitter(num_shards, hparam, classes_chosen).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform) # just take the first three classes as the ones to use, 1,2,3 for wildcam
         else:
-            training_datasets = NonIIDSplitter(num_shards=num_shards, iid=hparam['iid'], seed=seed).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform)
+            training_datasets, training_labeldists = NonIIDSplitter(num_shards=num_shards, iid=hparam['iid'], seed=seed).split(dataset.get_subset('train'), ds_bundle.groupby_fields, transform=ds_bundle.train_transform)
     else:
-        raise ValueError("num_shards should be greater or equal to 1, we got {}".format(num_shards))
-
+        raise ValueError("num_shards should be greater or equal to 1, we got {}".format(num_shards)) 
+    
     # initialize client
     clients = []
     for k in tqdm(range(hparam["num_clients"]), leave=False):
-        client = eval(hparam["client_method"])(k, device, training_datasets[k], ds_bundle, hparam)
+        client = eval(hparam["client_method"])(run_id, k, device, training_datasets[k], ds_bundle, hparam)
         clients.append(client)
     message = f"successfully initialize all clients!"
     logging.info(message)
     del message; gc.collect() 
 
     # initialize server (model should be initialized in the server. )
-    central_server = eval(hparam["server_method"])(device, ds_bundle, hparam)
+    central_server = eval(hparam["server_method"])(run_id, device, ds_bundle, hparam)
     if hparam['server_method'] == "FedDG":
         central_server.set_amploader(global_dataloader)
 
@@ -160,17 +163,27 @@ def main(args):
     central_server.register_clients(clients)
     central_server.register_testloader(testloader)
     central_server.label_dist=training_labeldists
-    ## do the target label dists here?
+
+    #num_classes=182 ## make this nonhardcoded
+    
+    # counts=np.zeros(num_classes)
+    # for name, dataloader in central_server.test_dataloader.items():
+    #     if name=="test":
+            
+    #         for sample in dataloader:
+    #             #print(np.array(sample[2]))
+    #             counts+=np.bincount(np.array(sample[1]),minlength=num_classes)
+    #             #counts.extend(np.array(sample[2]))
+    #         print("Class distribution, test set: ",counts)
+    #         print("Label rate, test set: ", counts/np.sum(counts))
+    # sys.exit(-1)
+    
     for name, dataloader in central_server.test_dataloader.items():
         if name=="test":
             metric, result_str = central_server.evaluate_global_model(dataloader, initial_dist=1) ## maybe change this later based on which label dist to consider
-        
-    
     
     # do federated learning
     central_server.fit()
-
-    # save final model ?
     
     # bye!
     

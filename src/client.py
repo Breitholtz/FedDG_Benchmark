@@ -33,7 +33,7 @@ class ERM(object):
         device: Training machine indicator (e.g. "cpu", "cuda").
         __model: torch.nn instance as a local model.
     """
-    def __init__(self, client_id, device, dataset, ds_bundle, hparam):
+    def __init__(self, run_id, client_id, device, dataset, ds_bundle, hparam):
         """Client object is initiated by the center server."""
         self.client_id = client_id
         self.device = device
@@ -50,6 +50,7 @@ class ERM(object):
         self.optimizer_name = self.hparam['optimizer']
         self.optim_config = self.hparam['optimizer_config']
         self.label_dist = None
+        self.run_id=run_id
         try:
             self.scheduler_name = self.hparam['scheduler']
             self.scheduler_config = self.hparam['scheduler_config']
@@ -58,8 +59,8 @@ class ERM(object):
             self.scheduler_config = {'factor': 1, 'total_iters': 1}
         self.dataloader = get_train_loader(self.loader_type, self.dataset, batch_size=self.batch_size, uniform_over_groups=None, grouper=self.ds_bundle.grouper, distinct_groups=False, n_groups_per_batch=self.n_groups_per_batch)
         self.saved_optimizer = False
-        self.opt_dict_path = "/mimer/NOBACKUP/groups/lupida/opt_dict/client_{}.pt".format(self.client_id) ### change these so we save all results and such in unique place
-        self.sch_dict_path = "/mimer/NOBACKUP/groups/lupida/sch_dict/client_{}.pt".format(self.client_id)
+        self.opt_dict_path = "/mimer/NOBACKUP/groups/lupida/opt_dict/"+str(run_id)+"_client_{}.pt".format(self.client_id) ### change these so we save all results and such in unique place
+        self.sch_dict_path = "/mimer/NOBACKUP/groups/lupida/sch_dict/"+str(run_id)+"_client_{}.pt".format(self.client_id)
         if os.path.exists(self.opt_dict_path): os.remove(self.opt_dict_path)
 
     def setup_model(self, featurizer, classifier):
@@ -89,7 +90,7 @@ class ERM(object):
         self.optimizer.zero_grad(set_to_none=True)
         self.model.to("cpu")
         torch.save(self.optimizer.state_dict(), self.opt_dict_path)
-        torch.save(self.scheduler.state_dict(), self.sch_dict_path)
+        #torch.save(self.scheduler.state_dict(), self.sch_dict_path)
         del self.scheduler, self.optimizer
         if self.device == "cuda": torch.cuda.empty_cache()
 
@@ -879,7 +880,7 @@ class FedProx(ERM):
         self.scheduler = eval(self.scheduler_name)(self.optimizer, **self.scheduler_config)
         if self.saved_optimizer:
             self.optimizer.load_state_dict(torch.load(self.opt_dict_path))
-            self.scheduler.load_state_dict(torch.load(self.sch_dict_path))
+            #self.scheduler.load_state_dict(torch.load(self.sch_dict_path))
     
     def end_train(self):
         # self.optimizer.zero_grad(set_to_none=True)
@@ -892,7 +893,7 @@ class FedProx(ERM):
         self.optimizer.zero_grad(set_to_none=True)
         self.model.to("cpu")
         torch.save(self.optimizer.state_dict(), self.opt_dict_path)
-        torch.save(self.scheduler.state_dict(), self.sch_dict_path)
+        #torch.save(self.scheduler.state_dict(), self.sch_dict_path)
         del self.scheduler, self.optimizer, self.global_model
         if self.device == "cuda": torch.cuda.empty_cache()
     

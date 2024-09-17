@@ -19,7 +19,7 @@ from .dataset_bundle import *
 import wandb
 
 class FedAvg(object):
-    def __init__(self, device, ds_bundle, hparam):
+    def __init__(self, run_id, device, ds_bundle, hparam):
         self.ds_bundle = ds_bundle
         self.device = device
         self.clients = []
@@ -34,6 +34,7 @@ class FedAvg(object):
         self.featurizer = None
         self.classifier = None
         self.client_labeldists=[]
+        self.run_id=run_id
     def setup_model(self, model_file=None, start_epoch=0):
         """
         The model setup depends on the datasets. 
@@ -116,6 +117,7 @@ class FedAvg(object):
 
     def aggregate(self, sampled_client_indices, coefficients):
         """Average the updated and transmitted parameters from each selected client."""
+        #print("FedAvg weights",coefficients)
         averaged_weights = OrderedDict()
         for it, idx in tqdm(enumerate(sampled_client_indices), leave=False):
             local_weights = self.clients[idx].model.state_dict()
@@ -188,8 +190,9 @@ class FedAvg(object):
             pass # this has already been found
             #dists=self.client_labeldists
         else:
-            #we have to estimate the label distributions
-            dists=estimate_label_dist(sampled_client_indices)
+            pass
+            #we have to estimate the label distributions @TODO
+            #dists=estimate_label_dist(sampled_client_indices)
         
         # evaluate selected clients with local dataset (same as the one used for local update)
         # self.evaluate_clients(sampled_client_indices)
@@ -206,8 +209,15 @@ class FedAvg(object):
         with torch.no_grad():
             y_pred = None
             y_true = None
+            hparam=self.hparam
             for batch in tqdm(dataloader):
                 data, labels, meta_batch = batch[0], batch[1], batch[2]
+                ### remove all 2 labels from test set, only happens when we have our own construction 
+                if hparam["imbalanced_split"]==1 and hparam["dataset"].lower()=="pacs":                    
+                    i, = np.where(labels != 2)
+                    labels=labels[i]
+                    data=data[i]
+                
                 if isinstance(meta_batch, list):
                     meta_batch = meta_batch[0]
                 data, labels = data.to(self.device), labels.to(self.device)
@@ -246,7 +256,7 @@ class FedAvg(object):
             
             
             if initial_dist:
-                self.target_label_dist=np.bincount(np.array(y_true.to("cpu")))
+                self.target_label_dist=np.bincount(np.array(y_true.to("cpu")),minlength=len(self.label_dist[0]))
             if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
         return metric
@@ -307,7 +317,7 @@ class FedAvg(object):
                     dirname=f"{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}_{self.hparam['custom_weighting']}_{self.hparam['reg_lambda']}"
                 else:
                     dirname=f"{self.ds_bundle.name}_{self.clients[0].name}_{self.hparam['server_method']}_{self.hparam['iid']}_{self.hparam['imbalanced_split']}"
-                filename=f"{r}_{self.hparam['seed']}_{'results.pkl'}" 
+                filename=f"{r}_{self.hparam['seed']}_{self.hparam['local_epochs']}_{'results.pkl'}" 
                 if not os.path.exists(self.hparam['result_path']+str(dirname)):
                     os.makedirs(self.hparam['result_path']+str(dirname))
                 with open(self.hparam['result_path']+str(dirname)+"/"+str(filename), 'wb') as f:
@@ -342,10 +352,10 @@ class FedAvg(object):
         torch.save(self.model.state_dict(), path)
 
 class FedCustomWeights(FedAvg):
- def __init__(self, device, ds_bundle, hparam):
-        super().__init__(device, ds_bundle, hparam)
+ def __init__(self, run_id, device, ds_bundle, hparam):
+        super().__init__(run_id, device, ds_bundle, hparam)
         self.reg_lambda=0
-        self.alphastar=None
+        self.alphastar=[]
  def evaluate_clients(self, sampled_client_indices):
         def evaluate_single_client(selected_index):
             self.clients[selected_index].client_evaluate()
@@ -354,6 +364,44 @@ class FedCustomWeights(FedAvg):
         for idx in tqdm(sampled_client_indices):
             sum+=self.clients[idx].client_evaluate()
         return sum
+ def hull_test(self, P, X, use_hull=True, verbose=True, hull_tolerance=1e-5, return_hull=True):
+        """
+        P is the point we want to check, X are the points which make up the vertices of the convex hull
+        """
+        from scipy.spatial import ConvexHull
+        if use_hull:
+            hull = ConvexHull(X)
+            X = X[hull.vertices]
+    
+        n_points = len(X)
+    
+        def F(x, X, P):
+            return np.linalg.norm( np.dot( x.T, X ) - P )
+    
+        bnds = [[0, None]]*n_points # coefficients for each point must be > 0
+        cons = ( {'type': 'eq', 'fun': lambda x: np.sum(x)-1} ) # Sum of coefficients must equal 1
+        x0 = np.ones((n_points,1))/n_points # starting coefficients
+    
+        result = scipy.optimize.minimize(F, x0, args=(X, P), bounds=bnds, constraints=cons)
+    
+        if result.fun < hull_tolerance:
+            hull_result = True
+        else:
+            hull_result = False
+    
+        if verbose:
+            print( '# boundary points:', n_points)
+            print( 'x.T * X - P:', F(result.x,X,P) )
+            if hull_result: 
+                print( 'Point P is in the hull space of X')
+            else: 
+                print( 'Point P is NOT in the hull space of X')
+    
+        if return_hull:
+            return hull_result, result.x, X
+        else:
+            return hull_result, result.x
+            
  def aggregate(self, sampled_client_indices, coefficients, weighting='uniform', client_label_dists=None):
         """Average the updated and transmitted parameters from each selected client."""
         num_sampled_clients = len(sampled_client_indices)
@@ -387,26 +435,53 @@ class FedCustomWeights(FedAvg):
                 coefficients[it]= self.clients[idx].accuracy/client_sum
             elif weighting=='alphastar':
                 self.reg_lambda = float(self.hparam['reg_lambda'])
-                import scipy
-                #print("We are in alphastar territory")
-                ## here we want to do the minimization that finds the trade-off between clients and target while keeping sample efficicency in mind
-                # min_alpha |T(y)-\sum_i alpha_i S_i(y)| + lambdasum_i (alpha_i/n_i)^2
-                #print("Target labels: ",self.target_label_dist)
-                #print("Client labels: ", self.label_dist)
-                x0=np.ones(np.array(coefficients).shape)/num_sampled_clients # start at uniform
-                def loss(alpha, target_labels=[], client_labels=[], reg_lambda=0):
-                    sum=0
-                    alpha_sum=0
-                    for idx, label in enumerate(client_labels):
-                        sum+=alpha[idx]*label
-                        alpha_sum+=alpha[idx]**2/(np.sum(label))**2
-
-                    obj=np.linalg.norm(target_labels-sum)+ alpha_sum*reg_lambda
-                    return obj
-                alphastar=scipy.optimize.minimize(loss, x0, args=(self.target_label_dist,self.label_dist, self.reg_lambda), constraints=(scipy.optimize.LinearConstraint(np.ones(len(x0)), ub=1)))
-                self.alphastar=alphastar.x
-                coefficients =alphastar.x
-                print("Alpha*: ",coefficients)
+                if len(self.alphastar)>=1:
+                    # we already have computed alphastar
+                    coefficients = self.alphastar
+                else: 
+                    import scipy
+                    # we should check if the target is in the convex hull of the clients in label space dist
+    
+                    #print("target dist",self.target_label_dist)
+                    #print("label dist",self.label_dist)
+                    #result, proj_point, hull = self.hull_test(np.array(self.target_label_dist), np.array(self.label_dist), verbose=True, hull_tolerance=1e-5, return_hull=True)
+                    
+                   
+    
+                    # if the target is within the convex hull, just compute alphastar, o.w. we want to project onto the convex hull first
+                    #print("We are in alphastar territory")
+                    ## here we want to do the minimization that finds the trade-off between clients and target while keeping sample efficicency in mind
+                    # min_alpha |T(y)-\sum_i alpha_i S_i(y)| + lambdasum_i (alpha_i/n_i)^2
+                    #print("Target labels: ",self.target_label_dist)
+                    #print("Client labels: ", self.label_dist)
+                    def loss(alpha, target_labels=[], client_labels=[], reg_lambda=1):
+                        sum=0
+                        alpha_sum=0
+    
+                        ### normalize label dists
+                        
+                        target_labels_norm=target_labels/(np.sum(target_labels))
+                        client_labels_norm=[i/(np.sum(i)) for i in client_labels]
+                        #print("target: ", target_labels)
+                        #print("clients: ", client_labels_norm)
+                        for idx, label in enumerate(client_labels_norm):
+                            sum+=alpha[idx]*label
+                        for idx, label in enumerate(client_labels):
+                            #sum+=alpha[idx]*label_
+                            alpha_sum+=alpha[idx]**2/(np.sum(label))#**2
+    
+                        #print("Faithfulness part: ",np.linalg.norm(target_labels-sum))
+                        #print("Sample efficiency part: ", alpha_sum*reg_lambda)
+                        obj=np.linalg.norm(target_labels_norm-sum)+ alpha_sum*reg_lambda
+                        return obj
+                       
+                    x0=np.ones(np.array(coefficients).shape)/num_sampled_clients # start at uniform
+                    target_dist=self.target_label_dist
+                    #print("Target dist: ", target_dist)    
+                    alphastar=scipy.optimize.minimize(loss, x0, args=(target_dist ,self.label_dist, self.reg_lambda), constraints=(scipy.optimize.LinearConstraint(np.ones(len(x0)), lb=1, ub=1)),bounds=scipy.optimize.Bounds(0,1))
+                    self.alphastar=alphastar.x
+                    coefficients =alphastar.x
+                    print("Alpha*: ",coefficients)
             
             ## TODO: do one based on client coherence?
             for key in self.model.state_dict().keys():

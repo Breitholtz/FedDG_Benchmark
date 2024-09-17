@@ -21,7 +21,6 @@ class DatasetSplitter(object):
 class ImbalancedSplitter(DatasetSplitter):
     def __init__(self, num_clients, config, test_classes, seed=1):
         self.test_classes = test_classes # which class should be missing
-        ## what should be in here?, how skewed the split should be, config of the run,
         self.num_clients=num_clients
         self.config=config
         self.seed=seed
@@ -44,6 +43,7 @@ class ImbalancedSplitter(DatasetSplitter):
         indices = np.array(dataset.indices)
         ## compute class distribution in the dataset initially
         print("Class distribution, training set:",np.bincount(np.array(dataset.y_array)))
+        print("Label rate, training set:",np.bincount(np.array(dataset.y_array))/np.sum(np.bincount(np.array(dataset.y_array))))
         class1_idx= np.where(dataset.y_array == self.test_classes[0])[0] ## do this for all the different classes? share the rest equally?
         class2_idx= np.where(dataset.y_array == self.test_classes[1])[0]
         class3_idx= np.where(dataset.y_array == self.test_classes[2])[0]
@@ -58,43 +58,26 @@ class ImbalancedSplitter(DatasetSplitter):
         class_indices=np.ravel(class_indices)
         rem_idx=np.delete(rem_idx, class_indices)
 
-        #print("Class distribution class1:",np.bincount(np.array(class1.y_array))) ## mismatch between indices[class1_idx] vs just class1_idx
         #split odd classes in two and give them to two clients; construct index sets for the three clients
         perm_indices = self.rng.permutation(rem_idx)
         remove3=WILDSSubset(dataset.dataset, perm_indices.tolist(), transform=transform)
-        #print("Class distribution w/o first 3:",np.bincount(np.array(remove3.y_array)))
         # as a final step we make one of the clients sample size much smaller 10% of remaining data vs. 45% each for the other two, could make this more extreme
-
         # percentage=self.lambda
         # 
         pos1=int(0.33*len(perm_indices))
         pos2=int(0.66*len(perm_indices))
         
         client1=np.append(np.append(perm_indices[:pos1],indices[class1_idx[:int(0.5*len(class1_idx))]]),indices[class2_idx[:int(0.5*len(class2_idx))]]) ## not seen 3
-        #print("# client 1 before:",len(client1))
-        #print(np.random.choice(client1, int(0.1*len(client1)),replace=False))
         client1=np.random.choice(client1, int(0.1*len(client1)),replace=False)
         client2=np.append(np.append(perm_indices[pos1:pos2],indices[class1_idx[int(0.5*len(class1_idx)):]]),indices[class3_idx[:int(0.5*len(class3_idx))]]) ## not seen 2 
         client3=np.append(np.append(perm_indices[pos2:],indices[class2_idx[int(0.5*len(class2_idx)):]]),indices[class3_idx[int(0.5*len(class3_idx)):]]) ## not seen 1
-        #print("# client 1 after:",len(client1))
-        #print("# client 2:",len(client2))
-        #print("# client 3:",len(client3))
-        
-        ### compute the label distribution in the clients after selection
-        # ys=[]
-        # for i in client1:
-        #     for idx in dataset._metadata_fields[2]: # idx
-        #         if idx==i:
-        #             ys.append(dataset._metadata_fields[1][i]) #y
-                
-        
-        #print("Class distribution:",np.bincount(np.array(dataset.y_array[client1])))
+
         c1=WILDSSubset(dataset.dataset, client1.tolist(), transform=transform)
         print("Class distribution c1:",np.bincount(np.array(c1.y_array)))
         c2=WILDSSubset(dataset.dataset, client2.tolist(), transform=transform)
         print("Class distribution c2:",np.bincount(np.array(c2.y_array)))
         c3=WILDSSubset(dataset.dataset, client3.tolist(), transform=transform)
-        print("Class distribution c3:",np.bincount(np.array(c3.y_array))) ## lacks 2 and 3?
+        print("Class distribution c3:",np.bincount(np.array(c3.y_array)))
         
 
         
@@ -233,7 +216,7 @@ class NonIIDSplitter():
                 raise NotImplementedError
             perm_indices = self.rng.permutation(indices)
             indices_per_domain.append(perm_indices)
-
+        label_dists=[] # for client label dist
         dataset_per_shards = []
         pointer = np.zeros(num_domains, dtype=np.int64)
         # print(pointer) 
@@ -252,12 +235,15 @@ class NonIIDSplitter():
                 dataset_per_shards.append(WILDSSubset(dataset, shard_indices, transform=transform))
             else:
                 raise NotImplementedError
-
+            if isinstance(dataset, WILDSSubset):
+                c1=WILDSSubset(dataset.dataset, shard_indices, transform=transform)
+                #print("Class distribution:",np.bincount(np.array(c1.y_array)))
+            label_dists.append(np.bincount(np.array(c1.y_array),minlength=182))
         assert np.array_equal(pointer, num_examples_per_domain)
 
         for i, dt in enumerate(dataset_per_shards):
             assert np.array_equal(np.array(np.bincount(dt.metadata_array[:,domain_field], minlength=num_domains)), np.array(final_examples_per_shards[i]))
-        return dataset_per_shards
+        return dataset_per_shards, label_dists
 
 
 def concat_subset(subset: WILDSSubset, other: WILDSSubset):
